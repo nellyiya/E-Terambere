@@ -1,0 +1,38 @@
+@import "tailwindcss";
+@theme { --color-brand:#034337; --font-sans:"Poppins",system-ui,sans-serif; --color-slate-500:#727886; --color-ink:#1c2e4e; --color-side:#034337; }
+body{background:#f8fafc;color:var(--color-ink)}
+input,select,textarea{background-color:var(--color-white);color:var(--color-ink)}
+.dark{color-scheme:dark;
+  --color-ink:#e6ebf3;--color-slate-50:#1b2740;--color-slate-100:#223350;--color-slate-200:#2c3f5e;--color-slate-300:#3a4f73;--color-slate-400:#8591a6;--color-slate-500:#9aa5b8;--color-slate-600:#b6bfcd;
+  --color-amber-100:#3a2e12;--color-amber-700:#f5c26b;--color-red-50:#2a171b;--color-red-100:#3b1d22;--color-red-200:#5a2a30;--color-red-700:#f19999}
+.dark body{background:#0e1624}
+.dark .bg-white{background-color:#162033}
+.dark input,.dark select,.dark textarea{background-color:#162033}
+.recharts-cartesian-grid line{stroke:var(--color-slate-200)}
+.recharts-text{fill:var(--color-slate-500)}
+.recharts-default-tooltip{background-color:var(--color-white) !important;border-color:var(--color-slate-200) !important}
+.dark .recharts-default-tooltip{background-color:#162033 !important}
+.recharts-tooltip-label{color:var(--color-ink)}
+/* Dark mode only: lighter tints of the same teal, so text and charts stay readable on the dark background */
+.dark .text-brand{color:#5fc2b0}
+.dark .recharts-bar-rectangle path{fill:#2f9c89}
+.dark .recharts-line-curve,.dark .recharts-area-curve{stroke:#4fb5a1}
+/* ---- polish layer: motion, depth and loading states (no new colors; only used on the polished pages) ---- */
+@keyframes rise{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+@keyframes shimmer{to{background-position:-200% 0}}
+.rise{animation:rise .55s cubic-bezier(.2,.7,.2,1) both;animation-delay:calc(var(--i,0)*80ms)}
+.skeleton{background:linear-gradient(90deg,var(--color-slate-100) 25%,var(--color-slate-50) 50%,var(--color-slate-100) 75%);background-size:200% 100%;animation:shimmer 1.4s linear infinite;border-radius:.75rem}
+.card-shadow{box-shadow:0 1px 2px rgb(15 23 42/.04),0 10px 28px -14px rgb(15 23 42/.16)}
+.dark .card-shadow{box-shadow:0 1px 2px rgb(0 0 0/.3),0 10px 28px -14px rgb(0 0 0/.6)}
+.gloss::after{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(135deg,rgb(255 255 255/.16),transparent 45%)}
+.dots::before{content:"";position:absolute;inset:0;pointer-events:none;background-image:radial-gradient(rgb(255 255 255/.10) 1px,transparent 1px);background-size:14px 14px;-webkit-mask-image:linear-gradient(135deg,transparent 30%,#000);mask-image:linear-gradient(135deg,transparent 30%,#000)}
+.tnum{font-variant-numeric:tabular-nums}
+.tone-Pending{background-color:#fef3c7;color:#b45309;border-color:#fde68a}
+.tone-Approved{background-color:rgb(3 67 55/.1);color:#034337;border-color:rgb(3 67 55/.2)}
+.tone-Flagged{background-color:#fee2e2;color:#b91c1c;border-color:#fecaca}
+.dark .tone-Pending{background-color:#3a2e12;color:#f5c26b;border-color:#5a4720}
+.dark .tone-Approved{background-color:rgb(95 194 176/.12);color:#5fc2b0;border-color:rgb(95 194 176/.3)}
+.dark .tone-Flagged{background-color:#3b1d22;color:#f19999;border-color:#5a2a30}
+@media (prefers-reduced-motion:reduce){.rise,.skeleton{animation:none}}
+.tone-Returned{background-color:#fee2e2;color:#b91c1c;border-color:#fecaca}
+.dark .tone-Returned{background-color:#3b1d22;color:#f19999;border-color:#5a2a30}

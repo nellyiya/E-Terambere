@@ -1,0 +1,142 @@
+
+import os
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from sqlalchemy import inspect, text
+
+from .db import Base, engine
+from . import models  # noqa: F401 (registers tables)
+from .admin import router
+from .auth import router as auth_router
+from .management import router as management_router
+from .supervisor_auth import router as supervisor_router
+from .security import jwt_secret
+
+
+# Refuse to start without a proper JWT_SECRET in .env
+jwt_secret()
+
+
+NEW_COLUMNS = {
+    "supervisors": [
+        ("password_hash", "VARCHAR(300)")
+    ],
+    "reports": [
+        ("start_time", "VARCHAR(5)"),
+        ("end_time", "VARCHAR(5)"),
+        ("challenge", "TEXT"),
+        ("return_note", "TEXT"),
+        ("reviewed_at", "TIMESTAMP"),
+        ("reviewed_by", "VARCHAR(254)")
+    ],
+    "cost_entries": [
+        ("quantity", "NUMERIC(14,2)"),
+        ("unit", "VARCHAR(20)"),
+        ("rate", "BIGINT"),
+        ("notes", "TEXT")
+    ],
+    "boq_items": [
+        ("quantity", "NUMERIC(14,2)")
+    ],
+    "projects": [
+        ("project_type", "VARCHAR(80)"),
+        ("client", "VARCHAR(160)"),
+        ("consultant", "VARCHAR(160)"),
+        ("location", "VARCHAR(200)"),
+        ("start_date", "DATE"),
+        ("end_date", "DATE")
+    ],
+    "report_activities": [
+        ("quantity", "VARCHAR(100)"),
+        ("location", "VARCHAR(200)")
+    ],
+    "report_equipment": [
+        ("kind", "VARCHAR(10)"),
+        ("trips_sand", "INTEGER"),
+        ("trips_stones", "INTEGER"),
+        ("fuel_opening", "NUMERIC(10,2)")
+    ]
+}
+
+
+def ensure_columns():
+    """
+    Add columns introduced in later versions.
+    create_all() does not add columns to existing tables.
+    """
+    insp = inspect(engine)
+
+    for table, cols in NEW_COLUMNS.items():
+        have = {c["name"] for c in insp.get_columns(table)}
+
+        for name, ddl in cols:
+            if name not in have:
+                with engine.begin() as connection:
+                    connection.execute(
+                        text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+                    )
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    # Creates missing tables without deleting existing tables or records.
+    Base.metadata.create_all(bind=engine)
+
+    # Adds missing columns where necessary.
+    ensure_columns()
+
+    yield
+
+
+app = FastAPI(
+    title="E-Terambere Admin API",
+    lifespan=lifespan
+)
+
+
+# Allow the React admin dashboard and Flutter mobile app.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173"
+    ],
+    allow_origin_regex=r"http://192\.168\..*",
+    allow_methods=[
+        "GET",
+        "POST",
+        "PUT",
+        "PATCH",
+        "DELETE",
+        "OPTIONS"
+    ],
+    allow_headers=[
+        "Authorization",
+        "Content-Type"
+    ],
+)
+
+
+# Register API routers.
+app.include_router(supervisor_router)
+app.include_router(router)
+app.include_router(management_router)
+app.include_router(auth_router)
+
+
+# Site progress photos uploaded by supervisors are served from here.
+os.makedirs("uploads/reports", exist_ok=True)
+
+app.mount(
+    "/uploads",
+    StaticFiles(directory="uploads"),
+    name="uploads"
+)
+
+
+@app.get("/health")
+def health():
+    return {"ok": True}
