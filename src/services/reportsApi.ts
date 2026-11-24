@@ -23,11 +23,31 @@ export interface EquipmentLine { name: string; details: string; hours: number; f
 export interface MaterialLine { kind: 'received' | 'used'; name: string; quantity: number; unit: string }
 export interface WorkerLine { role: string; headcount: number; dailyWage: number }
 export interface ReportDetail { id: string; project: string; projectName: string; site: string; supervisorId: number | null; date: string; status: RStatus; returnNote: string | null; reviewedAt: string | null; reviewedBy: string | null; startTime: string; endTime: string; challenge: string
-  activities: string[]; equipment: EquipmentLine[]; materials: MaterialLine[]; workers: WorkerLine[]; work: { boqItemId: number; quantity: number }[] }
+  activities: string[]; equipment: EquipmentLine[]; materials: MaterialLine[]; workers: WorkerLine[]; work: {  boqItemId: number
+  itemNo: number
+  description: string
+  unit: string
+  quantity: number
+  amount: number }[] }
 export const getReport = async (code: string): Promise<ReportDetail> => {
   const { data: d } = await api.get(`/reports/${code}`)
   return { id: d.id, project: d.project, projectName: d.project_name, site: d.site, supervisorId: d.supervisor_id, date: d.report_date, status: d.status, returnNote: d.return_note, reviewedAt: d.reviewed_at, reviewedBy: d.reviewed_by, startTime: d.start_time ?? '', endTime: d.end_time ?? '', challenge: d.challenge ?? '',
-    activities: d.activities, work: d.work.map((w: { boq_item_id: number; quantity: number }) => ({ boqItemId: w.boq_item_id, quantity: w.quantity })),
+    activities: d.activities,
+work: d.work.map((w: {
+  boq_item_id: number
+  item_no: number
+  description: string
+  unit: string
+  quantity: number
+  amount: number
+}) => ({
+  boqItemId: w.boq_item_id,
+  itemNo: w.item_no,
+  description: w.description,
+  unit: w.unit,
+  quantity: w.quantity,
+  amount: w.amount
+})),
     equipment: d.equipment.map((e: { name: string; details: string | null; hours: number; fuel_received: number; fuel_used: number; fuel_balance: number }) => ({ name: e.name, details: e.details ?? '', hours: e.hours, fuelReceived: e.fuel_received, fuelUsed: e.fuel_used, fuelBalance: e.fuel_balance })),
     materials: d.materials, workers: d.workers.map((w: { role: string; headcount: number; daily_wage: number }) => ({ role: w.role, headcount: w.headcount, dailyWage: w.daily_wage })) }
 }
