@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { LayoutDashboard, FolderKanban, Users, FileText, HardHat, BarChart3, Wallet, Settings, Search, Bell, ChevronsLeft, LogOut } from 'lucide-react'
+import { LayoutDashboard, FolderKanban, Users, FileText, HardHat, Wallet, Settings, Search, Bell, ChevronsLeft, LogOut } from 'lucide-react'
 import { useCallback, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { clearToken } from '../lib/auth'
@@ -10,7 +10,7 @@ import Notifications from './Notifications'
 import ThemeToggle from './ThemeToggle'
 export const nav = [
   ['Dashboard','/dashboard',LayoutDashboard],['Projects','/projects',FolderKanban],['Supervisors','/supervisors',Users],['Reports','/reports',FileText],
-  ['Analytics','/analytics',BarChart3],['Project Management','/project-management',Wallet],['Settings','/settings',Settings]] as const
+  ['Project Management','/project-management',Wallet],['Settings','/settings',Settings]] as const
 export default function Layout() {
   const [open, setOpen] = useState(true), qc = useQueryClient(), go = useNavigate()
   const endSession = useCallback((expired = false) => { clearToken(); qc.clear(); go(expired ? '/login?expired=1' : '/login', { replace: true }) }, [qc, go])

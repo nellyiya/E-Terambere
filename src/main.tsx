@@ -8,7 +8,6 @@ import Login from './pages/Login'
 import Projects from './pages/Projects'
 import Dashboard from './pages/Dashboard'
 import Supervisors from './pages/Supervisors'
-import Analytics from './pages/Analytics'
 import Settings from './pages/Settings'
 import SupervisorDetail from './pages/SupervisorDetail'
 import Costs from './pages/Costs'
@@ -27,7 +26,6 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       <Route path="projects/:projectId/:tab?" element={<ProjectWorkspace />} />
       <Route path="supervisors" element={<Supervisors />} />
       <Route path="supervisors/:id" element={<SupervisorDetail />} />
-      <Route path="analytics" element={<Analytics />} />
       <Route path="settings" element={<Settings />} />
       <Route path="dashboard" element={<Dashboard />} />
       <Route path="project-management" element={<ProjectManagement />} />
