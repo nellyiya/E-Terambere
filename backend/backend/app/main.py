@@ -11,6 +11,7 @@ from . import models  # noqa: F401 (registers tables)
 from .admin import router
 from .auth import router as auth_router
 from .management import router as management_router
+from .supervisor_auth import photo_router
 from .supervisor_auth import router as supervisor_router
 from .security import jwt_secret
 
@@ -19,7 +20,14 @@ from .security import jwt_secret
 jwt_secret()
 
 
+# Binary column type differs per database.
+BLOB = {"postgresql": "BYTEA", "mysql": "LONGBLOB"}.get(engine.dialect.name, "BLOB")
+
 NEW_COLUMNS = {
+    "report_photos": [
+        ("content_type", "VARCHAR(50)"),
+        ("data", BLOB)
+    ],
     "supervisors": [
         ("password_hash", "VARCHAR(300)")
     ],
@@ -128,6 +136,7 @@ app.include_router(supervisor_router)
 app.include_router(router)
 app.include_router(management_router)
 app.include_router(auth_router)
+app.include_router(photo_router)  # serves /uploads/reports/{name} from disk, or from the database when the file is gone
 
 
 # Site progress photos uploaded by supervisors are served from here.

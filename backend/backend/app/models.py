@@ -1,5 +1,5 @@
 from datetime import date, datetime
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, LargeBinary, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .db import Base
 
@@ -221,3 +221,7 @@ class ReportPhoto(Base):  # site progress photos uploaded from the mobile app
     path: Mapped[str] = mapped_column(String(300))  # relative file path, e.g. uploads/reports/RPT-0001_ab12.jpg
     caption: Mapped[str | None] = mapped_column(String(200), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    # The image itself is kept in the database too, because the web host's disk is wiped on every
+    # deploy/restart. Deferred, so listing reports never loads the image bytes.
+    content_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)

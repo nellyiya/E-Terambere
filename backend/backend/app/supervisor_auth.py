@@ -34,6 +34,7 @@ _DATE_MAX = date(2100, 12, 31)
 
 import jwt
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, Response
 from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session, joinedload
@@ -270,8 +271,44 @@ class SupervisorReportIn(BaseModel):
 
 # ── report detail serializer ──────────────────────────────────────────────────
 
+# Set PUBLIC_BASE_URL (e.g. https://e-teramber.onrender.com) on the host to pin photo links.
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
+
+
 def _base(request: Request) -> str:
-    return str(request.base_url)
+    """Public base URL for photo links. Behind a proxy the app sees http://, which a
+    https page refuses to load (mixed content), so force https on any non-local host."""
+    if PUBLIC_BASE_URL:
+        return PUBLIC_BASE_URL + "/"
+    base = str(request.base_url)
+    host = request.url.hostname or ""
+    local = host in ("localhost", "127.0.0.1") or host.startswith(("192.168.", "10."))
+    if base.startswith("http://") and not local:
+        base = "https://" + base[len("http://"):]
+    return base
+
+
+def _iso_utc(dt: datetime | None) -> str | None:
+    """Timestamps are stored as naive UTC. Send them with an explicit offset so the app
+    does not read them as local time (which shifts them by the phone's UTC offset)."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).isoformat()
+
+
+def _find_duplicate(db: Session, supervisor_id: int, project_id: int, site_id: int,
+                    day: date, exclude_id: int | None = None):
+    q = select(Report).where(
+        Report.supervisor_id == supervisor_id,
+        Report.project_id == project_id,
+        Report.site_id == site_id,
+        Report.report_date == day,
+    )
+    if exclude_id is not None:
+        q = q.where(Report.id != exclude_id)
+    return db.scalars(q.limit(1)).first()
 
 
 def _photo_url(base_url: str, path: str) -> str:
@@ -294,7 +331,7 @@ def _report_detail(db: Session, r: Report, base_url: str = "") -> dict:
         .order_by(ReportEvent.id.asc())
     ).all()
     if events:
-        created_at = events[0].at.isoformat()
+        created_at = _iso_utc(events[0].at)
 
     activities = [
         {"description": a.description, "quantity": a.quantity or "", "location": a.location or ""}
@@ -356,7 +393,7 @@ def _report_detail(db: Session, r: Report, base_url: str = "") -> dict:
         ],
         "labour": labour,
         "challenges": [{"description": c} for c in (r.challenge or "").split("\n") if c.strip()],
-        "history": [{"at": e.at.isoformat(), "action": e.action, "note": e.note} for e in events],
+        "history": [{"at": _iso_utc(e.at), "action": e.action, "note": e.note} for e in events],
         "photos": photos,
     }
 
@@ -646,6 +683,14 @@ def supervisor_create_report(
     if body.report_date > date.today() + timedelta(days=1):
         raise HTTPException(422, "report_date: a report can't be dated in the future.")
 
+    dup = _find_duplicate(db, sup.id, p.id, site.id, body.report_date)
+    if dup:
+        raise HTTPException(
+            409,
+            f"A report for {p.code}, {site.name} on {body.report_date.isoformat()} already exists ({dup.code}). "
+            "Open it and edit it instead of creating a new one.",
+        )
+
     r = Report(
         code="TMP-" + uuid.uuid4().hex[:10],
         project_id=p.id,
@@ -661,9 +706,9 @@ def supervisor_create_report(
     )
     db.add(r)
     db.flush()
-    count = db.scalar(select(func.count()).select_from(Report)) or 0
-    r.code = f"RPT-{count:04d}"
-    log_event(db, r, "submitted", sup.email)
+    r.code = f"RPT-{r.id:04d}"  # from the unique id: counting rows repeats codes after a delete
+    if body.status == "Pending":  # saving a draft is not a submission
+        log_event(db, r, "submitted", sup.email)
     save_supervisor_report_lines(db, r, body)
     db.commit()
     db.refresh(r)
@@ -726,6 +771,13 @@ def supervisor_update_report(
     if body.report_date > date.today() + timedelta(days=1):
         raise HTTPException(422, "report_date: a report can't be dated in the future.")
 
+    dup = _find_duplicate(db, sup.id, r.project_id, site.id, body.report_date, exclude_id=r.id)
+    if dup:
+        raise HTTPException(
+            409,
+            f"Another report for {p.code}, {site.name} on {body.report_date.isoformat()} already exists ({dup.code}).",
+        )
+
     r.site_id = site.id
     r.report_date = body.report_date
     r.activity = body.activity.strip()
@@ -787,6 +839,10 @@ UPLOAD_DIR = "uploads/reports"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 ALLOWED_PHOTO_EXT = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}
 MAX_PHOTO_BYTES = 15 * 1024 * 1024
+_PHOTO_MIME = {
+    ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+    ".webp": "image/webp", ".heic": "image/heic", ".heif": "image/heif",
+}
 
 
 @router.post("/reports/{code}/photos")
@@ -798,7 +854,8 @@ def supervisor_upload_photo(
     sup: Supervisor = Depends(get_current_supervisor),
     db: Session = Depends(get_db),
 ):
-    """Upload a progress photo for a report. Returns { "url": "...", "caption": "..." }."""
+    """Upload a progress photo for a report. Returns { "url": "...", "caption": "..." }.
+    The image is stored in the database (permanent) and also on disk (fast)."""
     r = find_report(db, code)
     if r.supervisor_id != sup.id:
         raise HTTPException(403, "You can only upload photos to your own reports.")
@@ -806,20 +863,44 @@ def supervisor_upload_photo(
     if ext not in ALLOWED_PHOTO_EXT:
         raise HTTPException(422, "Only image files (JPG, PNG, WEBP, HEIC) can be uploaded.")
 
-    file_name = f"{r.code}_{os.urandom(8).hex()}{ext}"
-    file_path = f"{UPLOAD_DIR}/{file_name}"
-    size = 0
-    with open(file_path, "wb") as buffer:
-        while chunk := photo.file.read(1024 * 1024):
-            size += len(chunk)
-            if size > MAX_PHOTO_BYTES:
-                break
-            buffer.write(chunk)
-    if size > MAX_PHOTO_BYTES:
-        os.remove(file_path)
+    data = photo.file.read(MAX_PHOTO_BYTES + 1)
+    if not data:
+        raise HTTPException(422, "The photo file is empty.")
+    if len(data) > MAX_PHOTO_BYTES:
         raise HTTPException(413, "The photo is too large (maximum 15 MB).")
 
+    file_name = f"{r.code}_{os.urandom(8).hex()}{ext}"
+    file_path = f"{UPLOAD_DIR}/{file_name}"
+    try:
+        with open(file_path, "wb") as buffer:
+            buffer.write(data)
+    except OSError:
+        pass  # the database copy is the one that matters
+
     cap = (caption or "").strip()[:200]
-    db.add(ReportPhoto(report_id=r.id, path=file_path, caption=cap))
+    db.add(ReportPhoto(
+        report_id=r.id,
+        path=file_path,
+        caption=cap,
+        content_type=_PHOTO_MIME.get(ext, "image/jpeg"),
+        data=data,
+    ))
     db.commit()
     return {"url": _photo_url(_base(request), file_path), "caption": cap}
+
+
+# Public (the image URL carries no login), registered before the /uploads static mount so it wins.
+photo_router = APIRouter()
+
+
+@photo_router.get("/uploads/reports/{name}", include_in_schema=False)
+def serve_report_photo(name: str, db: Session = Depends(get_db)):
+    name = os.path.basename(name)
+    path = f"{UPLOAD_DIR}/{name}"
+    headers = {"Cache-Control": "public, max-age=86400"}
+    if os.path.isfile(path):
+        return FileResponse(path, headers=headers)
+    ph = db.scalar(select(ReportPhoto).where(ReportPhoto.path == path))
+    if ph is not None and ph.data:
+        return Response(content=bytes(ph.data), media_type=ph.content_type or "image/jpeg", headers=headers)
+    raise HTTPException(404, "Photo not found.")
