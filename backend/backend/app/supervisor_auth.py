@@ -706,7 +706,8 @@ def supervisor_create_report(
     )
     db.add(r)
     db.flush()
-    r.code = f"RPT-{r.id:04d}"  # from the unique id: counting rows repeats codes after a delete
+    count = db.scalar(select(func.count()).select_from(Report)) or 0
+    r.code = f"RPT-{count:04d}"
     if body.status == "Pending":  # saving a draft is not a submission
         log_event(db, r, "submitted", sup.email)
     save_supervisor_report_lines(db, r, body)

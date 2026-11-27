@@ -555,11 +555,31 @@ def update_report(code: str, body: ReportIn, db: Session = Depends(get_db), admi
 @router.delete("/reports/{code}", status_code=204)
 def delete_report(code: str, db: Session = Depends(get_db)):
     r = find_report(db, code)
+
     db.execute(delete(ReportWork).where(ReportWork.report_id == r.id))
     db.execute(delete(CostEntry).where(CostEntry.report_id == r.id))
+
     for tbl in (ReportActivity, ReportEquipment, ReportMaterial, ReportWorker, ReportEvent):
         db.execute(delete(tbl).where(tbl.report_id == r.id))
-    db.delete(r); db.commit()
+
+    db.execute(delete(ReportPhoto).where(ReportPhoto.report_id == r.id))
+
+    db.delete(r)
+    db.flush()
+
+    # Temporarily assign unique codes to avoid conflicts during renumbering
+    reports = list(db.scalars(select(Report).order_by(Report.id)))
+
+    for report in reports:
+        report.code = "TMP-" + uuid.uuid4().hex[:12]
+
+    db.flush()
+
+    # Renumber all remaining reports sequentially
+    for index, report in enumerate(reports, start=1):
+        report.code = f"RPT-{index:04d}"
+
+    db.commit()
 
 # ---------- work done (bill of quantities, quantity x rate)
 @router.get("/work-done")
