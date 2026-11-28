@@ -22,7 +22,7 @@ export default function Notifications() {
       <div className="max-h-96 overflow-auto">
         {error ? <p className="p-4 text-sm text-red-700">Could not load notifications. <button onClick={() => refetch()} className="underline">Try again</button></p>
           : isLoading ? <p className="p-4 text-sm text-slate-500">Loading…</p>
-          : !data.length ? <p className="p-6 text-center text-sm text-slate-500">You're all caught up. Change which alerts you get in Settings.</p>
+          : !data.length ? <p className="p-6 text-center text-sm text-slate-500">No reports need your attention right now.</p>
           : data.map(n => { const isRead = read.includes(n.id); return (
             <button key={n.id} onClick={() => { mark([n.id]); setOpen(false); nav(n.to) }} className={`flex w-full gap-3 border-b border-slate-50 px-4 py-3 text-left hover:bg-slate-50 ${isRead ? '' : 'bg-brand/5'}`}>
               <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${isRead ? 'bg-transparent' : n.tone === 'red' ? 'bg-red-500' : 'bg-amber-500'}`} />

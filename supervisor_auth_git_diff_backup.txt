@@ -1,0 +1,360 @@
+warning: in the working copy of 'backend/backend/app/supervisor_auth.py', LF will be replaced by CRLF the next time Git touches it
+[1mdiff --git a/backend/backend/app/supervisor_auth.py b/backend/backend/app/supervisor_auth.py[m
+[1mindex 5801e3e..96e6acb 100644[m
+[1m--- a/backend/backend/app/supervisor_auth.py[m
+[1m+++ b/backend/backend/app/supervisor_auth.py[m
+[36m@@ -1,606 +1,3 @@[m
+[31m-"""[m
+[31m-Phase 1 – Supervisor authentication.[m
+[31m-[m
+[31m-Endpoints (all under /api/supervisor):[m
+[31m-  POST /login           – supervisor logs in with email + password → JWT[m
+[31m-  GET  /me              – returns the authenticated supervisor's profile[m
+[31m-  POST /change-password – supervisor changes their own password[m
+[31m-[m
+[31m-Admin-side endpoint (under /api/admin, protected by admin_only):[m
+[31m-  POST /api/admin/supervisors/{sid}/reset-password[m
+[31m-[m
+[31m-JWT design:[m
+[31m-  - Separate issuer ("eterambere-supervisor") so supervisor tokens are never[m
+[31m-    accepted by admin_only and admin tokens are never accepted here.[m
+[31m-  - No token_version: if a supervisor is deactivated, every subsequent[m
+[31m-    request is rejected because we check `active` on every call.[m
+[31m-[m
+[31m-Hash compatibility:[m
+[31m-  - New passwords use Argon2id via security.hash_password.[m
+[31m-  - Existing supervisors have legacy pbkdf2$<salt>$<hash> hashes from the[m
+[31m-    old admin.py. These are verified on login and silently upgraded to[m
+[31m-    Argon2id so no password reset is required.[m
+[31m-"""[m
+[31m-[m
+[31m-import hashlib[m
+[31m-import os[m
+[31m-import re[m
+[31m-import shutil[m
+[31m-import uuid[m
+[31m-from datetime import date, datetime, timedelta, timezone[m
+[31m-# far-past / far-future defaults when dates are missing, so Flutter's non-nullable DateTime fields stay happy[m
+[31m-_DATE_MIN = date(1900, 1, 1)[m
+[31m-_DATE_MAX = date(2100, 12, 31)[m
+[31m-[m
+[31m-import jwt[m
+[31m-from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile[m
+[31m-from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator[m
+[31m-from sqlalchemy import delete, func, or_, select[m
+[31m-from sqlalchemy.orm import Session, joinedload[m
+[31m-[m
+[31m-from .admin import find_report, log_event[m
+[31m-from .db import get_db[m
+[31m-from .models import ([m
+[31m-    Project,[m
+[31m-    ProjectSupervisor,[m
+[31m-    Report,[m
+[31m-    ReportActivity,[m
+[31m-    ReportEquipment,[m
+[31m-    ReportEvent,[m
+[31m-    ReportMaterial,[m
+[31m-    ReportPhoto,[m
+[31m-    ReportWorker,[m
+[31m-    Site,[m
+[31m-    Supervisor,[m
+[31m-)[m
+[31m-from .security import ([m
+[31m-    hash_password,[m
+[31m-    jwt_secret,[m
+[31m-    password_problems,[m
+[31m-    token_minutes,[m
+[31m-    verify_password,[m
+[31m-)[m
+[31m-[m
+[31m-SUPERVISOR_ISSUER = "eterambere-supervisor"[m
+[31m-[m
+[31m-router = APIRouter(prefix="/api/supervisor", tags=["supervisor-auth"])[m
+[31m-[m
+[31m-[m
+[31m-# ── legacy hash support ───────────────────────────────────────────────────────[m
+[31m-[m
+[31m-def _verify_pbkdf2(stored: str, pw: str) -> bool:[m
+[31m-    """Verify legacy pbkdf2$<salt_hex>$<hash_hex> hashes from the old admin.py."""[m
+[31m-    try:[m
+[31m-        _, salt_hex, hash_hex = stored.split("$")[m
+[31m-        salt = bytes.fromhex(salt_hex)[m
+[31m-        expected = hashlib.pbkdf2_hmac("sha256", pw.encode(), salt, 200_000).hex()[m
+[31m-        return expected == hash_hex[m
+[31m-    except Exception:[m
+[31m-        return False[m
+[31m-[m
+[31m-[m
+[31m-def _verify_any(stored: str | None, pw: str) -> bool:[m
+[31m-    """Accept both Argon2id (new) and pbkdf2 (legacy) hashes."""[m
+[31m-    if not stored:[m
+[31m-        return False[m
+[31m-    if stored.startswith("$argon2"):[m
+[31m-        return verify_password(stored, pw)[m
+[31m-    if stored.startswith("pbkdf2$"):[m
+[31m-        return _verify_pbkdf2(stored, pw)[m
+[31m-    return False[m
+[31m-[m
+[31m-[m
+[31m-# ── token helpers ─────────────────────────────────────────────────────────────[m
+[31m-[m
+[31m-def _create_supervisor_token(supervisor_id: int, email: str) -> tuple[str, int]:[m
+[31m-    minutes = token_minutes()[m
+[31m-    t = datetime.now(timezone.utc)[m
+[31m-    token = jwt.encode([m
+[31m-        {[m
+[31m-            "sub": str(supervisor_id),[m
+[31m-            "email": email,[m
+[31m-            "iss": SUPERVISOR_ISSUER,[m
+[31m-            "iat": t,[m
+[31m-            "exp": t + timedelta(minutes=minutes),[m
+[31m-        },[m
+[31m-        jwt_secret(),[m
+[31m-        algorithm="HS256",[m
+[31m-    )[m
+[31m-    return token, minutes * 60[m
+[31m-[m
+[31m-[m
+[31m-def _decode_supervisor_token(token: str) -> dict:[m
+[31m-    return jwt.decode([m
+[31m-        token,[m
+[31m-        jwt_secret(),[m
+[31m-        algorithms=["HS256"],[m
+[31m-        issuer=SUPERVISOR_ISSUER,[m
+[31m-        options={"require": ["exp", "sub", "iss"]},[m
+[31m-    )[m
+[31m-[m
+[31m-[m
+[31m-def get_current_supervisor([m
+[31m-    authorization: str | None = Header(default=None),[m
+[31m-    db: Session = Depends(get_db),[m
+[31m-) -> Supervisor:[m
+[31m-    """Dependency: validates the Bearer token and returns the active Supervisor row."""[m
+[31m-    if not authorization or not authorization.lower().startswith("bearer "):[m
+[31m-        raise HTTPException(401, "Please sign in.", headers={"WWW-Authenticate": "Bearer"})[m
+[31m-    try:[m
+[31m-        claims = _decode_supervisor_token(authorization[7:].strip())[m
+[31m-        supervisor_id = int(claims["sub"])[m
+[31m-    except (jwt.PyJWTError, ValueError):[m
+[31m-        raise HTTPException([m
+[31m-            401,[m
+[31m-            "Your session has ended. Please sign in again.",[m
+[31m-            headers={"WWW-Authenticate": "Bearer"},[m
+[31m-        )[m
+[31m-[m
+[31m-    sup = db.get(Supervisor, supervisor_id)[m
+[31m-    if not sup:[m
+[31m-        raise HTTPException(401, "Account not found.", headers={"WWW-Authenticate": "Bearer"})[m
+[31m-    if not sup.active:[m
+[31m-        raise HTTPException(403, "Your account has been deactivated. Contact your administrator.")[m
+[31m-    if not sup.password_hash:[m
+[31m-        raise HTTPException(403, "Your account has no password set. Contact your administrator.")[m
+[31m-    return sup[m
+[31m-[m
+[31m-[m
+[31m-def _token_out(sup: Supervisor) -> dict:[m
+[31m-    token, expires_in = _create_supervisor_token(sup.id, sup.email)[m
+[31m-    return {[m
+[31m-        "access_token": token,[m
+[31m-        "token_type": "bearer",[m
+[31m-        "expires_in": expires_in,[m
+[31m-        "supervisor": {[m
+[31m-            "id": sup.id,[m
+[31m-            "code": sup.code,[m
+[31m-            "name": sup.name,[m
+[31m-            "email": sup.email,[m
+[31m-            "phone": sup.phone,[m
+[31m-        },[m
+[31m-    }[m
+[31m-[m
+[31m-[m
+[31m-# ── schemas ───────────────────────────────────────────────────────────────────[m
+[31m-[m
+[31m-class LoginIn(BaseModel):[m
+[31m-    email: str = Field(max_length=160)[m
+[31m-    password: str = Field(min_length=1, max_length=128)[m
+[31m-[m
+[31m-[m
+[31m-class ChangePasswordIn(BaseModel):[m
+[31m-    current_password: str = Field(min_length=1, max_length=128)[m
+[31m-    new_password: str = Field(min_length=1, max_length=128)[m
+[31m-[m
+[31m-[m
+[31m-# ── helpers ───────────────────────────────────────────────────────────────────[m
+[31m-[m
+[31m-def _rep_status_to_flutter(s: str | None) -> str:[m
+[31m-    """Map DB status values to the strings the Flutter _reportStatus expects."""[m
+[31m-    if not s:[m
+[31m-        return "draft"[m
+[31m-    m = {"Pending": "submitted", "Approved": "reviewed", "Returned": "requires_correction"}[m
+[31m-    return m.get(s.strip(), "draft")[m
+[31m-[m
+[31m-[m
+[31m-def _time_to_minutes(t: str | None) -> int | None:[m
+[31m-    """'HH:MM' -> minutes since midnight."""[m
+[31m-    if not t:[m
+[31m-        return None[m
+[31m-    parts = t.split(":")[m
+[31m-    return int(parts[0]) * 60 + int(parts[1])[m
+[31m-[m
+[31m-[m
+[31m-def _minutes_to_time(m: int | None) -> str | None:[m
+[31m-    """minutes since midnight -> 'HH:MM'."""[m
+[31m-    if m is None:[m
+[31m-        return None[m
+[31m-    h = m // 60[m
+[31m-    mi = m % 60[m
+[31m-    return f"{h:02d}:{mi:02d}"[m
+[31m-[m
+[31m-[m
+[31m-class ActivityLine(BaseModel):[m
+[31m-    description: str = Field(min_length=1, max_length=500)[m
+[31m-    quantity: str | None = Field(default=None, max_length=100)[m
+[31m-    location: str | None = Field(default=None, max_length=200)[m
+[31m-[m
+[31m-[m
+[31m-class EquipmentLine(BaseModel):[m
+[31m-    kind: str | None = Field(default=None, max_length=10)  # machine / truck / tool[m
+[31m-    name: str = Field(min_length=1, max_length=120)[m
+[31m-    note: str | None = Field(default=None, max_length=200)[m
+[31m-    hours: float | None = Field(default=0, ge=0, le=24)  # the app sends null for trucks and tools[m
+[31m-    trips_sand: int | None = Field(default=0, ge=0)[m
+[31m-    trips_stones: int | None = Field(default=0, ge=0)[m
+[31m-    opening: float | None = Field(default=None, ge=0, le=100000)[m
+[31m-    received: float | None = Field(default=None, ge=0, le=100000)[m
+[31m-    used: float | None = Field(default=None, ge=0, le=100000)[m
+[31m-[m
+[31m-[m
+[31m-class MaterialLineIn(BaseModel):[m
+[31m-    name: str = Field(min_length=1, max_length=100)[m
+[31m-    quantity: float | None = Field(default=0, ge=0, le=10**9)[m
+[31m-    unit: str = Field(default="", max_length=20)[m
+[31m-[m
+[31m-[m
+[31m-class LabourLineIn(BaseModel):[m
+[31m-    role: str = Field(min_length=1, max_length=100)[m
+[31m-    # the app sends headcount / daily_wage; count / rate are accepted too[m
+[31m-    count: int = Field(validation_alias=AliasChoices("count", "headcount"), ge=0, le=10000)[m
+[31m-    rate: float | None = Field(default=None, validation_alias=AliasChoices("rate", "daily_wage"), ge=0, le=10**7)[m
+[31m-[m
+[31m-[m
+[31m-class PhotoRef(BaseModel):  # a photo already uploaded: lets the app keep, caption or remove photos on edit[m
+[31m-    url: str = Field(max_length=500)[m
+[31m-    caption: str | None = Field(default=None, max_length=200)[m
+[31m-[m
+[31m-[m
+[31m-class SupervisorReportIn(BaseModel):[m
+[31m-    project: str | None = Field(default=None, max_length=160)  # code or name; only used when the supervisor has several projects[m
+[31m-    site: str[m
+[31m-    report_date: date[m
+[31m-    activity: str = Field(min_length=1, max_length=120)[m
+[31m-    notes: str | None = Field(default=None, max_length=4000)[m
+[31m-    start_time: str | None = None  # HH:MM[m
+[31m-    end_time: str | None = None  # HH:MM[m
+[31m-    challenge: str | None = Field(default=None, max_length=3000)[m
+[31m-    status: str = Field(default="Draft", pattern=r"^(Draft|Pending)$")  # Draft or Pending only[m
+[31m-    activities: list[ActivityLine] = [][m
+[31m-    equipment: list[EquipmentLine] = [][m
+[31m-    materials_received: list[MaterialLineIn] = [][m
+[31m-    materials_used: list[MaterialLineIn] = [][m
+[31m-    workers: list[LabourLineIn] = Field(default=[], validation_alias=AliasChoices("workers", "labour"))[m
+[31m-    photos: list[PhotoRef] | None = None  # None = leave photos alone; a list = keep exactly these[m
+[31m-[m
+[31m-    @field_validator("start_time", "end_time")[m
+[31m-    @classmethod[m
+[31m-    def check_time(cls, v):[m
+[31m-        if v and not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", v):[m
+[31m-            raise ValueError("use the format HH:MM, for example 07:00")[m
+[31m-        return v or None[m
+[31m-[m
+[31m-    @model_validator(mode="after")[m
+[31m-    def check_order(self):[m
+[31m-        if self.start_time and self.end_time and self.end_time <= self.start_time:[m
+[31m-            raise ValueError("end_time must be after start_time")[m
+[31m-        return self[m
+[31m-[m
+[31m-[m
+[31m-# ── report detail serializer ──────────────────────────────────────────────────[m
+[31m-[m
+[31m-def _base(request: Request) -> str:[m
+[31m-    return str(request.base_url)[m
+[31m-[m
+[31m-[m
+[31m-def _photo_url(base_url: str, path: str) -> str:[m
+[31m-    path = path.replace("\\", "/").lstrip("/")[m
+[31m-    return f"{base_url.rstrip('/')}/{path}" if base_url else f"/{path}"[m
+[31m-[m
+[31m-[m
+[31m-def _num(v):[m
+[31m-    return None if v is None else float(v)[m
+[31m-[m
+[31m-[m
+[31m-def _report_detail(db: Session, r: Report, base_url: str = "") -> dict:[m
+[31m-    p = db.get(Project, r.project_id)[m
+[31m-    site = db.get(Site, r.site_id)[m
+[31m-[m
+[31m-    created_at = None[m
+[31m-    events = db.scalars([m
+[31m-        select(ReportEvent)[m
+[31m-        .where(ReportEvent.report_id == r.id)[m
+[31m-        .order_by(ReportEvent.id.asc())[m
+[31m-    ).all()[m
+[31m-    if events:[m
+[31m-        created_at = events[0].at.isoformat()[m
+[31m-[m
+[31m-    activities = [[m
+[31m-        {"description": a.description, "quantity": a.quantity or "", "location": a.location or ""}[m
+[31m-        for a in db.scalars([m
+[31m-            select(ReportActivity).where(ReportActivity.report_id == r.id).order_by(ReportActivity.id)[m
+[31m-        ).all()[m
+[31m-    ][m
+[31m-    equipment = [[m
+[31m-        {[m
+[31m-            "kind": e.kind or "machine",[m
+[31m-            "name": e.name,[m
+[31m-            "note": e.details or "",[m
+[31m-            "hours": _num(e.hours),[m
+[31m-            "trips_sand": e.trips_sand,[m
+[31m-            "trips_stones": e.trips_stones,[m
+[31m-            "opening": _num(e.fuel_opening),[m
+[31m-            "received": _num(e.fuel_received),[m
+[31m-            "used": _num(e.fuel_used),[m
+[31m-        }[m
+[31m-        for e in db.scalars([m
+[31m-            select(ReportEquipment).where(ReportEquipment.report_id == r.id).order_by(ReportEquipment.id)[m
+[31m-        ).all()[m
+[31m-    ][m
+[31m-    materials = db.scalars([m
+[31m-        select(ReportMaterial).where(ReportMaterial.report_id == r.id).order_by(ReportMaterial.id)[m
+[31m-    ).all()[m
+[31m-    labour = [[m
+[31m-        {"role": w.role, "count": w.headcount, "rate": w.daily_wage}[m
+[31m-        for w in db.scalars([m
+[31m-            select(ReportWorker).where(ReportWorker.report_id == r.id).order_by(ReportWorker.id)[m
+[31m-        ).all()[m
+[31m-    ][m
+[31m-    photos = [[m
+[31m-        {"url": _photo_url(base_url, ph.path), "caption": ph.caption or ""}[m
+[31m-        for ph in db.scalars([m
+[31m-            select(ReportPhoto).where(ReportPhoto.report_id == r.id).order_by(ReportPhoto.id)[m
+[31m-        ).all()[m
+[31m-    ][m
+[31m-[m
+[31m-    return {[m
+[31m-        "id": r.code,[m
+[31m-        "project_id": p.code if p else "",[m
+[31m-        "project_name": p.name if p else "",[m
+[31m-        "date": r.report_date.isoformat(),[m
+[31m-        "created_at": created_at,[m
+[31m-        "site": site.name if site else "",[m
+[31m-        "comments": r.notes,[m
+[31m-        "start_min": _time_to_minutes(r.start_time),[m
+[31m-        "end_min": _time_to_minutes(r.end_time),[m
+[31m-        "status": _rep_status_to_flutter(r.status),[m
+[31m-        "admin_feedback": r.return_note,[m
+[31m-        "tasks": activities,[m
+[31m-        "equipment": equipment,[m
+[31m-        "materials_received": [[m
+[31m-            {"name": m.name, "quantity": _num(m.quantity), "unit": m.unit} for m in materials if m.kind == "received"[m
+[31m-        ],[m
+[31m

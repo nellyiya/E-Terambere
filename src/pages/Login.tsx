@@ -2,11 +2,13 @@
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
-import { Eye, EyeOff, HardHat, Lock, Mail, ArrowRight } from 'lucide-react'
+import { Eye, EyeOff, Lock, Mail, ArrowRight, HardHat } from 'lucide-react'
 import { errMsg } from '../lib/api'
 import { getToken } from '../lib/auth'
 import { emailOk } from '../lib/password'
 import { login } from '../services/authApi'
+
+const GRAD = 'linear-gradient(145deg, #2fae9d 0%, #1c8578 52%, #0f4a43 100%)'
 
 export default function Login() {
   const nav = useNavigate(), qc = useQueryClient(), [sp] = useSearchParams()
@@ -30,29 +32,41 @@ export default function Login() {
 
   return (
     <div className="grid min-h-screen lg:grid-cols-2">
-      <aside className="gloss dots relative hidden overflow-hidden bg-linear-to-br from-[#034337] to-[#0a5748] p-12 text-white lg:flex lg:flex-col lg:justify-between">
-        <span className="absolute -right-16 -top-16 h-64 w-64 rounded-full bg-white/10" />
-        <span className="absolute -bottom-20 left-10 h-56 w-56 rounded-full bg-white/10" />
+      <aside className="relative hidden flex-col justify-between overflow-hidden bg-linear-to-br from-[#022b23] via-[#034337] to-[#0a5748] p-14 text-white lg:flex">
+        <style>{`
+          @keyframes sway { from { transform: translate3d(0,0,0) rotate(var(--r,0deg)) } to { transform: translate3d(18px,-14px,0) rotate(var(--r,0deg)) } }
+          .sway { animation: sway 12s ease-in-out infinite alternate }
+          @media (prefers-reduced-motion: reduce) { .sway { animation: none } }
+        `}</style>
 
-        <div className="relative flex items-center gap-3 text-lg font-semibold tracking-wide">
-          <span className="grid h-10 w-10 place-items-center rounded-xl bg-white/15 ring-1 ring-white/20">
-            <HardHat size={22} />
-          </span>
-          E-terambere
+        {/* background shapes */}
+        <div aria-hidden className="pointer-events-none absolute inset-0">
+          <div className="absolute -right-32 -top-32 h-[30rem] w-[30rem] rounded-full bg-emerald-400/20 blur-3xl" />
+          <div className="absolute -bottom-40 -left-32 h-[26rem] w-[26rem] rounded-full bg-teal-300/10 blur-3xl" />
+          <div className="absolute left-[18%] top-0 h-40 w-3 rounded-full bg-white/10" />
+          <div className="absolute left-[18%] top-0 ml-6 h-40 w-3 rounded-full bg-white/10" />
+          <div className="sway absolute -right-20 top-[30%] h-64 w-64 rounded-full border-[16px] border-white/[0.07]" />
+          <div style={{ '--r': '-38deg' } as React.CSSProperties} className="sway absolute -right-24 top-[52%] h-32 w-[28rem] rounded-full bg-linear-to-r from-emerald-300/30 to-teal-200/5" />
+          <div style={{ '--r': '-38deg' } as React.CSSProperties} className="sway absolute -left-10 top-[36%] h-14 w-[16rem] rounded-full bg-white/[0.06]" />
         </div>
 
-        <div className="relative max-w-md">
-          <h1 className="text-4xl font-semibold leading-tight">
-            Manage projects. Monitor progress. Stay in control.
+        {/* brand */}
+        <div className="relative z-10 flex items-center gap-3">
+          <span style={{ background: GRAD }} className="grid h-12 w-12 place-items-center rounded-full text-white shadow-lg shadow-black/20 ring-2 ring-white/80"><HardHat size={22} /></span>
+          <span className="text-lg font-semibold">E-terambere</span>
+        </div>
+
+        {/* message */}
+        <div className="relative z-10">
+          <h1 className="max-w-lg text-balance text-6xl font-bold leading-[1.05] tracking-tight">
+            Build. Manage. Grow together.
           </h1>
-          <p className="mt-4 text-white/85">
-            Oversee construction projects, manage supervisors, review daily site reports, and track project progress and costs from one central dashboard.
+          <div className="mt-8 h-0.5 w-16 rounded-full bg-white/50" />
+          <p className="mt-6 max-w-md text-base leading-relaxed text-white/70">
+            Follow every site, report and cost of your construction projects from one clean place.
           </p>
+          <p className="mt-12 text-xs text-white/40">E-Terambere · Workforce &amp; Project Management</p>
         </div>
-
-        <p className="relative text-xs text-white/70">
-          Administrator access only
-        </p>
       </aside>
 
       <main className="grid place-items-center p-6">

@@ -3,7 +3,7 @@ import uuid
 from collections import defaultdict
 from datetime import date, timedelta
 from typing import Literal
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File, Form
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session, joinedload
@@ -371,8 +371,13 @@ def reset_supervisor_password(sid: int, body: ResetPasswordIn, db: Session = Dep
 
 # ---------- reports
 @router.get("/reports")
-def list_reports(project: str | None = None, site: str | None = None, date_from: date | None = None, date_to: date | None = None, status: Literal["Pending", "Approved", "Returned"] | None = None, search: str = "", pa=Depends(page_args), db: Session = Depends(get_db)):
+def list_reports(project: str | None = None, site: str | None = None, date_from: date | None = None, date_to: date | None = None, status: Literal["Pending", "Approved", "Returned"] | None = None, search: str = "", sort: Literal["asc", "desc"] = "desc", pa=Depends(page_args), db: Session = Depends(get_db)):
     page, size = pa
+    order = (
+        (Report.report_date.asc(), Report.id.asc())
+        if sort == "asc"
+        else (Report.report_date.desc(), Report.id.desc())
+    )
     pid, sid = scope(db, project, site)
     cond = report_filters(pid, sid, date_from, date_to)
     if status: cond.append(Report.status == status)
@@ -381,7 +386,7 @@ def list_reports(project: str | None = None, site: str | None = None, date_from:
         cond.append(or_(Report.code.ilike(like), Report.activity.ilike(like)))
     total = db.scalar(select(func.count()).select_from(Report).where(*cond)) or 0
     rows = db.execute(select(Report, Project.code, Project.name, Site.name, Supervisor.name).join(Project, Project.id == Report.project_id).join(Site, Site.id == Report.site_id)
-                      .outerjoin(Supervisor, Supervisor.id == Report.supervisor_id).where(*cond).order_by(Report.report_date.desc(), Report.id.desc()).offset((page - 1) * size).limit(size)).all()
+                      .outerjoin(Supervisor, Supervisor.id == Report.supervisor_id).where(*cond).order_by(*order).offset((page - 1) * size).limit(size)).all()
     return {"items": [dict(id=r.code, date=r.report_date, project_id=pc, project_name=pn, site=sn, supervisor=sup, activity=r.activity, status=r.status, return_note=r.return_note) for r, pc, pn, sn, sup in rows], "total": total, "page": page, "size": size}
 
 class WorkLine(BaseModel):
@@ -395,11 +400,16 @@ class CostLine(BaseModel):
 
 class ActivityLine(BaseModel):
     description: str = Field(min_length=2, max_length=500)
+    quantity: float = Field(default=0, ge=0, le=10**9)
+    location: str | None = Field(default=None, max_length=200)
 
 class EquipmentLine(BaseModel):
+    kind: Literal["Machine", "Truck", "Tool"] = "Machine"
     name: str = Field(min_length=2, max_length=120)
     details: str | None = Field(default=None, max_length=200)
     hours: float = Field(default=0, ge=0, le=24)
+    trips_sand: int = Field(default=0, ge=0, le=100000)
+    trips_stones: int = Field(default=0, ge=0, le=100000)
     fuel_received: float = Field(default=0, ge=0, le=100000)
     fuel_used: float = Field(default=0, ge=0, le=100000)
     fuel_balance: float = Field(default=0, ge=0, le=100000)
@@ -465,25 +475,76 @@ def save_lines(db: Session, rep: Report, p: Project, site: Site, body: ReportIn)
     db.execute(delete(CostEntry).where(CostEntry.report_id == rep.id))
     for tbl in (ReportActivity, ReportEquipment, ReportMaterial, ReportWorker):
         db.execute(delete(tbl).where(tbl.report_id == rep.id))
-    for a in body.activities: db.add(ReportActivity(report_id=rep.id, description=a.description.strip()))
-    for e in body.equipment: db.add(ReportEquipment(report_id=rep.id, name=e.name.strip(), details=(e.details or '').strip() or None, hours=e.hours, fuel_received=e.fuel_received, fuel_used=e.fuel_used, fuel_balance=e.fuel_balance))
+    for a in body.activities:
+        db.add(ReportActivity(
+            report_id=rep.id,
+            description=a.description.strip(),
+            quantity=a.quantity,
+            location=(a.location or "").strip() or None,
+        ))
+    for e in body.equipment:
+        previous_balance = db.execute(
+            select(ReportEquipment.fuel_balance)
+            .join(Report, Report.id == ReportEquipment.report_id)
+            .where(
+                Report.project_id == p.id,
+                func.lower(ReportEquipment.name) == e.name.strip().lower(),
+                Report.id != rep.id,
+                or_(
+                    Report.report_date < rep.report_date,
+                    (Report.report_date == rep.report_date) & (Report.id < rep.id),
+                ),
+            )
+            .order_by(Report.report_date.desc(), Report.id.desc())
+            .limit(1)
+        ).scalar()
+
+        opening_balance = float(previous_balance or 0)
+        calculated_balance = opening_balance + e.fuel_received - e.fuel_used
+
+        db.add(ReportEquipment(
+            report_id=rep.id,
+            kind=e.kind,
+            name=e.name.strip(),
+            details=(e.details or "").strip() or None,
+            hours=e.hours,
+            trips_sand=e.trips_sand,
+            trips_stones=e.trips_stones,
+            fuel_received=e.fuel_received,
+            fuel_used=e.fuel_used,
+            fuel_balance=calculated_balance,
+        ))
     for m in body.materials: db.add(ReportMaterial(report_id=rep.id, kind=m.kind, name=m.name.strip(), quantity=m.quantity, unit=m.unit.strip()))
     for w in body.workers: db.add(ReportWorker(report_id=rep.id, role=w.role.strip(), headcount=w.headcount, daily_wage=w.daily_wage))
     for w in body.work:
         db.add(ReportWork(report_id=rep.id, boq_item_id=w.boq_item_id, quantity=w.quantity))
 
 def fuel_warnings(db: Session, rep: Report, p: Project, body: ReportIn) -> list[str]:
-    """Fuel balance should equal the previous balance + received - used. Returns warnings; never blocks saving."""
+    """Warn if calculated fuel balance becomes negative; balance is automatic."""
     out = []
     for e in body.equipment:
-        prev = db.execute(select(ReportEquipment.fuel_balance).join(Report, Report.id == ReportEquipment.report_id)
-                          .where(Report.project_id == p.id, func.lower(ReportEquipment.name) == e.name.strip().lower(), Report.id != rep.id,
-                                 or_(Report.report_date < body.report_date, (Report.report_date == body.report_date) & (Report.id < rep.id)))
-                          .order_by(Report.report_date.desc(), Report.id.desc()).limit(1)).scalar()
-        if prev is not None:
-            expected = float(prev) + e.fuel_received - e.fuel_used
-            if abs(expected - e.fuel_balance) > 0.5:
-                out.append(f"{e.name}: the balance is {e.fuel_balance:g} L, but the previous balance plus received minus used is {expected:g} L.")
+        prev = db.execute(
+            select(ReportEquipment.fuel_balance)
+            .join(Report, Report.id == ReportEquipment.report_id)
+            .where(
+                Report.project_id == p.id,
+                func.lower(ReportEquipment.name) == e.name.strip().lower(),
+                Report.id != rep.id,
+                or_(
+                    Report.report_date < rep.report_date,
+                    (Report.report_date == rep.report_date) & (Report.id < rep.id),
+                ),
+            )
+            .order_by(Report.report_date.desc(), Report.id.desc())
+            .limit(1)
+        ).scalar()
+
+        calculated = float(prev or 0) + e.fuel_received - e.fuel_used
+        if calculated < 0:
+            out.append(
+                f"{e.name}: calculated fuel balance is {calculated:g} L, "
+                "which is below zero."
+            )
     return out
 
 def log_event(db: Session, r: Report, action: str, by: str | None, note: str | None = None):
@@ -525,6 +586,45 @@ def create_report(body: ReportIn, db: Session = Depends(get_db), admin: AdminUse
     warnings = fuel_warnings(db, r, p, body)
     db.commit()
     return {**report_detail(db, r), "warnings": warnings}
+
+@router.post("/reports/{code}/photos")
+async def upload_admin_report_photo(
+    code: str,
+    photo: UploadFile = File(...),
+    caption: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+    admin: AdminUser = Depends(admin_only),
+):
+    r = find_report(db, code)
+
+    allowed = {
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "image/webp": ".webp",
+    }
+    content_type = (photo.content_type or "").lower()
+    if content_type not in allowed:
+        raise HTTPException(415, "Only JPG, PNG, and WEBP images are allowed.")
+
+    data = await photo.read(15 * 1024 * 1024 + 1)
+    if len(data) > 15 * 1024 * 1024:
+        raise HTTPException(413, "Image must be 15 MB or smaller.")
+    if not data:
+        raise HTTPException(400, "The uploaded image is empty.")
+
+    filename = f"{code}_{uuid.uuid4().hex}{allowed[content_type]}"
+    photo_record = ReportPhoto(
+        report_id=r.id,
+        path=f"uploads/reports/{filename}",
+        caption=(caption or "").strip()[:200] or None,
+        content_type=content_type,
+        data=data,
+    )
+    db.add(photo_record)
+    db.commit()
+    db.refresh(photo_record)
+    return {"id": photo_record.id, "caption": photo_record.caption}
+
 
 @router.get("/reports/{code}")
 def get_report(code: str, request: Request, db: Session = Depends(get_db)):
@@ -776,7 +876,7 @@ def notifications(flagged: bool = True, pending: bool = False, db: Session = Dep
         return []
     rows = db.execute(select(Report, Project.code, Project.name, Site.name).join(Project, Project.id == Report.project_id).join(Site, Site.id == Report.site_id)
                       .where(Report.status.in_(statuses)).order_by(Report.report_date.desc(), Report.id.desc()).limit(15)).all()
-    return [dict(id=r.code, kind=r.status.lower(), title="Report returned for correction" if r.status == "Returned" else "Report awaiting review", text=f"{r.code} · {pn}, {sn}", date=r.report_date, project_id=pc) for r, pc, pn, sn in rows]
+    return [dict(id=r.code, kind=r.status.lower(), title="Report returned for correction" if r.status == "Returned" else "Report awaiting review", text=f"{r.code} Â· {pn}, {sn}", date=r.report_date, project_id=pc) for r, pc, pn, sn in rows]
 
 # ---------- settings (profile, organization, notification choices)
 class SettingsIn(BaseModel):

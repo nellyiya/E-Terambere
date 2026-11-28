@@ -1,12 +1,9 @@
-
 import type { CSSProperties, ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import {
   Area,
   AreaChart,
-  Bar,
-  BarChart,
   CartesianGrid,
   ResponsiveContainer,
   Tooltip,
@@ -18,13 +15,16 @@ import {
   FileText,
   FolderKanban,
   Users,
-  Wallet,
   type LucideIcon,
 } from 'lucide-react'
-import { CountUp, Skeleton, tip } from '../components/ui'
+import { Skeleton, tip } from '../components/ui'
+import StatStrip from '../components/StatStrip'
 import { errMsg } from '../lib/api'
 import { getDashboard } from '../services/dashboardApi'
-import { rwf } from '../services/costs'
+import { getSettings } from '../services/settings'
+
+// Chart colour (SVG needs a real value). Keep in step with the brand colour set in Layout.tsx.
+const BRAND = '#1c8578'
 
 const Panel = ({
   title,
@@ -32,6 +32,7 @@ const Panel = ({
   icon: I,
   to,
   i,
+  className = '',
   children,
 }: {
   title: string
@@ -39,20 +40,21 @@ const Panel = ({
   icon: LucideIcon
   to?: string
   i: number
+  className?: string
   children: ReactNode
 }) => (
   <div
     style={{ '--i': i } as CSSProperties}
-    className="rise card-shadow rounded-2xl border border-slate-200 bg-white p-6 transition duration-300 hover:-translate-y-0.5 hover:shadow-lg"
+    className={`rise card-shadow flex flex-col rounded-3xl border border-slate-200 bg-white p-5 transition duration-300 hover:shadow-lg ${className}`}
   >
-    <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+    <div className="mb-4 flex shrink-0 flex-wrap items-start justify-between gap-3">
       <div className="flex items-start gap-3">
-        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#034337]/10 text-[#034337]">
+        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-brand/10 text-brand">
           <I size={18} />
         </span>
 
         <div>
-          <h2 className="font-semibold text-slate-800">{title}</h2>
+          <h2 className="font-semibold">{title}</h2>
           <p className="mt-0.5 text-xs leading-relaxed text-slate-500">
             {sub}
           </p>
@@ -62,7 +64,7 @@ const Panel = ({
       {to && (
         <Link
           to={to}
-          className="shrink-0 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-medium text-[#034337] transition hover:bg-[#034337]/5"
+          className="shrink-0 whitespace-nowrap rounded-full bg-brand px-4 py-1.5 text-xs font-medium text-white shadow-sm transition hover:opacity-90"
         >
           View details ↗
         </Link>
@@ -83,10 +85,12 @@ const day = (s: string) => {
   return `${mon[Number(m) - 1]} ${Number(dd)}`
 }
 
+const clamp = (n: number) => Math.max(0, Math.min(100, Math.round(n || 0)))
+
 const Empty = ({ text }: { text: string }) => (
-  <div className="grid h-64 place-items-center">
+  <div className="grid min-h-[12rem] flex-1 place-items-center">
     <div className="max-w-sm text-center">
-      <div className="mx-auto mb-3 grid h-12 w-12 place-items-center rounded-2xl bg-[#034337]/5 text-[#034337]">
+      <div className="mx-auto mb-3 grid h-12 w-12 place-items-center rounded-2xl bg-brand/5 text-brand">
         <FileText size={22} />
       </div>
       <p className="text-sm text-slate-500">{text}</p>
@@ -97,10 +101,61 @@ const Empty = ({ text }: { text: string }) => (
 const grid = (
   <CartesianGrid
     stroke="#e2e8f0"
-    vertical={false}
     strokeDasharray="3 3"
   />
 )
+
+// Circular progress indicator with the percentage in the middle.
+const Ring = ({
+  value,
+  label,
+  sub,
+}: {
+  value: number
+  label: string
+  sub: string
+}) => {
+  const r = 42
+  const c = 2 * Math.PI * r
+
+  return (
+    <div className="flex items-center gap-4">
+      <div className="relative h-24 w-24 shrink-0">
+        <svg viewBox="0 0 100 100" className="h-full w-full -rotate-90">
+          <circle
+            cx="50"
+            cy="50"
+            r={r}
+            fill="none"
+            stroke="#e2e8f0"
+            strokeWidth="9"
+          />
+          <circle
+            cx="50"
+            cy="50"
+            r={r}
+            fill="none"
+            stroke={BRAND}
+            strokeWidth="9"
+            strokeLinecap="round"
+            strokeDasharray={c}
+            strokeDashoffset={c - (c * value) / 100}
+            style={{ transition: 'stroke-dashoffset 900ms ease' }}
+          />
+        </svg>
+
+        <span className="absolute inset-0 grid place-items-center text-lg font-semibold tnum text-brand">
+          {value}%
+        </span>
+      </div>
+
+      <div>
+        <p className="text-sm font-semibold">{label}</p>
+        <p className="mt-0.5 text-xs leading-relaxed text-slate-500">{sub}</p>
+      </div>
+    </div>
+  )
+}
 
 export default function Dashboard() {
   const {
@@ -111,6 +166,12 @@ export default function Dashboard() {
   } = useQuery({
     queryKey: ['dashboard'],
     queryFn: getDashboard,
+  })
+
+  // Same query the layout uses, so it comes from the cache. Only used for the welcome card.
+  const { data: me } = useQuery({
+    queryKey: ['settings'],
+    queryFn: getSettings,
   })
 
   if (error)
@@ -126,14 +187,13 @@ export default function Dashboard() {
   if (isLoading || !d)
     return (
       <div className="space-y-6">
-        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4">
-          {[0, 1, 2, 3].map(i => (
-            <Skeleton key={i} className="h-44" />
-          ))}
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
+          <Skeleton className="h-52" />
+          <Skeleton className="h-52 lg:col-span-2" />
         </div>
 
-        <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-          <Skeleton className="h-96" />
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
+          <Skeleton className="h-96 lg:col-span-2" />
           <Skeleton className="h-96" />
         </div>
       </div>
@@ -148,17 +208,6 @@ export default function Dashboard() {
 
   const busiest = days.length
     ? days.reduce((a, b) => (b.reports > a.reports ? b : a))
-    : null
-
-  const totalCost = d.costByCategory.reduce(
-    (a, c) => a + c.amount,
-    0,
-  )
-
-  const top = d.costByCategory.length
-    ? d.costByCategory.reduce((a, c) =>
-        c.amount > a.amount ? c : a,
-      )
     : null
 
   const cards: [string, number, string, LucideIcon, string][] = [
@@ -192,89 +241,93 @@ export default function Dashboard() {
     ],
   ]
 
+  const name = me?.name ?? 'Admin'
+  const initials =
+    name
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map(w => w[0].toUpperCase())
+      .join('') || 'A'
+
+  const today = new Date().toLocaleDateString('en-GB', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  })
+
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-4 lg:h-full">
 
-      {/* KPI CARDS */}
-      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4">
-        {cards.map(([l, v, s, I, to], i) => (
-          <Link
-            key={l}
-            to={to}
-            style={{ '--i': i } as CSSProperties}
-            className="rise group relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:border-[#034337]/30 hover:shadow-xl"
-          >
-            {/* Subtle green background */}
-            <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-[#034337]/[0.07] via-transparent to-transparent" />
+      {/* TOP ROW: WELCOME + KPI TILES */}
+      <div className="grid shrink-0 grid-cols-1 gap-4 lg:grid-cols-3">
 
-            {/* Top accent */}
-            <div className="absolute left-0 top-0 h-1 w-full bg-[#034337]" />
+        {/* WELCOME CARD */}
+        <div
+          style={{ '--i': 0 } as CSSProperties}
+          className="rise card-shadow flex flex-col justify-between rounded-3xl border border-slate-200 bg-white p-5"
+        >
+          <div className="flex items-center gap-4">
+            <span className="grid h-16 w-16 shrink-0 place-items-center rounded-full bg-brand text-xl font-semibold text-white ring-4 ring-brand/15">
+              {initials}
+            </span>
 
-            <div className="relative flex items-start justify-between">
-              <div className="space-y-4">
-                <div className="grid h-12 w-12 place-items-center rounded-2xl bg-[#034337]/10 text-[#034337] transition-all duration-300 group-hover:scale-110 group-hover:bg-[#034337] group-hover:text-white">
-                  <I size={23} strokeWidth={1.8} />
-                </div>
-
-                <div>
-                  <p className="text-3xl font-bold tracking-tight text-slate-800 tnum">
-                    <CountUp value={v} />
-                  </p>
-
-                  <p className="mt-1.5 text-sm font-semibold text-slate-800">
-                    {l}
-                  </p>
-
-                  <p className="mt-1 text-xs leading-relaxed text-slate-500">
-                    {s}
-                  </p>
-                </div>
-              </div>
-
-              <span className="relative text-xl text-slate-300 transition-all duration-300 group-hover:translate-x-1 group-hover:text-[#034337]">
-                ↗
-              </span>
+            <div className="min-w-0">
+              <p className="truncate text-lg font-semibold">{name}</p>
+              <p className="mt-0.5 text-xs text-slate-500">
+                Welcome to your dashboard
+              </p>
             </div>
+          </div>
 
-            <div className="relative mt-5 flex items-center gap-2 border-t border-slate-100 pt-4">
-              <span className="h-2 w-2 rounded-full bg-[#034337]" />
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3">
+            <span className="text-xs font-medium text-slate-500">{today}</span>
 
-              <span className="text-xs font-medium text-slate-500">
-                {[
-                  'Projects overview',
-                  'Report activity',
-                  'Team overview',
-                  k.pending > 0 ? 'Action required' : 'All caught up',
-                ][i]}
-              </span>
-            </div>
-          </Link>
-        ))}
+            <Link
+              to={k.pending > 0 ? '/reports?status=Pending' : '/reports'}
+              className="rounded-full bg-brand/10 px-3 py-1 text-xs font-medium text-brand transition hover:bg-brand/15"
+            >
+              {k.pending > 0
+                ? `${k.pending} to review`
+                : 'All caught up'}
+            </Link>
+          </div>
+        </div>
+
+        {/* STAT STRIP */}
+        <StatStrip
+          i={1}
+          className="lg:col-span-2"
+          items={cards.map(([label, value, sub, icon, to]) => ({ label, value, sub, icon, to }))}
+        />
       </div>
 
       {/* CHARTS */}
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-3">
 
-        {/* REPORTS SUBMITTED - VERTICAL BAR CHART */}
+        {/* REPORTS SUBMITTED - AREA CHART */}
         <Panel
-          i={4}
+          i={2}
           title="Reports submitted per day"
           sub="How many reports supervisors sent in on each day"
           icon={FileText}
           to="/reports"
+          className="min-h-[20rem] lg:col-span-2 lg:min-h-0"
         >
           {days.length === 0 ? (
             <Empty text="No reports yet. They appear here when reports are added." />
           ) : (
-            <div className="h-72">
+            <div className="relative min-h-[12rem] flex-1">
+              <div className="absolute inset-0">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart
+                <AreaChart
                   data={days}
                   margin={{ top: 12, right: 10, left: -15, bottom: 5 }}
                 >
                   <defs>
                     <linearGradient
-                      id="reportBarFill"
+                      id="reportAreaFill"
                       x1="0"
                       y1="0"
                       x2="0"
@@ -282,13 +335,13 @@ export default function Dashboard() {
                     >
                       <stop
                         offset="0%"
-                        stopColor="#034337"
-                        stopOpacity={1}
+                        stopColor={BRAND}
+                        stopOpacity={0.3}
                       />
                       <stop
                         offset="100%"
-                        stopColor="#034337"
-                        stopOpacity={0.65}
+                        stopColor={BRAND}
+                        stopOpacity={0.02}
                       />
                     </linearGradient>
                   </defs>
@@ -300,7 +353,7 @@ export default function Dashboard() {
                     fontSize={11}
                     tickLine={false}
                     axisLine={false}
-                    tick={{ fill: '#64748b' }}
+                    tick={{ fill: '#727886' }}
                     dy={8}
                   />
 
@@ -309,45 +362,59 @@ export default function Dashboard() {
                     allowDecimals={false}
                     tickLine={false}
                     axisLine={false}
-                    tick={{ fill: '#64748b' }}
+                    tick={{ fill: '#727886' }}
                     width={35}
                   />
 
                   <Tooltip
                     {...tip}
-                    cursor={{ fill: '#034337', opacity: 0.05 }}
+                    cursor={{ stroke: BRAND, strokeOpacity: 0.25 }}
                     formatter={(v: number) => [
                       `${v} reports`,
                       'Submitted',
                     ]}
                   />
 
-                  <Bar
+                  <Area
+                    type="monotone"
                     dataKey="reports"
                     name="Reports"
-                    fill="url(#reportBarFill)"
-                    radius={[7, 7, 0, 0]}
-                    maxBarSize={45}
+                    stroke={BRAND}
+                    strokeWidth={2}
+                    fill="url(#reportAreaFill)"
+                    dot={{
+                      r: 5,
+                      fill: BRAND,
+                      stroke: '#ffffff',
+                      strokeWidth: 2,
+                    }}
+                    activeDot={{
+                      r: 7,
+                      fill: BRAND,
+                      stroke: '#ffffff',
+                      strokeWidth: 2,
+                    }}
                     animationDuration={900}
                   />
-                </BarChart>
+                </AreaChart>
               </ResponsiveContainer>
+              </div>
             </div>
           )}
 
           {busiest && (
-            <div className="mt-4 flex flex-wrap items-center gap-2 rounded-xl bg-slate-50 px-4 py-3">
-              <span className="grid h-8 w-8 place-items-center rounded-lg bg-[#034337]/10 text-[#034337]">
+            <div className="mt-3 flex shrink-0 flex-wrap items-center gap-2 rounded-xl bg-slate-50 px-4 py-2">
+              <span className="grid h-8 w-8 place-items-center rounded-lg bg-brand/10 text-brand">
                 <FileText size={16} />
               </span>
 
               <p className="text-sm text-slate-500">
                 Busiest day:{' '}
-                <span className="font-semibold text-slate-800">
+                <span className="font-semibold text-[#1c2e4e]">
                   {busiest.label}
                 </span>{' '}
                 with{' '}
-                <span className="font-semibold text-[#034337]">
+                <span className="font-semibold text-brand">
                   {busiest.reports}
                 </span>{' '}
                 reports.
@@ -356,117 +423,26 @@ export default function Dashboard() {
           )}
         </Panel>
 
-        {/* RECORDED COST  */}
+        {/* PHYSICAL + FINANCIAL PROGRESS */}
         <Panel
-          i={5}
-          title="Recorded cost by category"
-          sub="Money recorded as spent in each category. Work Done is not counted as spending."
-          icon={Wallet}
-          to="/project-management/summary"
+          i={3}
+          title="Progress"
+          sub="Average physical and financial progress across your projects"
+          icon={ClipboardCheck}
+          className="lg:min-h-0"
         >
-          {totalCost === 0 ? (
-            <Empty text="No costs recorded yet. Labor comes from reports, and other costs are entered on each project." />
-          ) : (
-            <div className="h-72">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart
-                  data={d.costByCategory}
-                  layout="vertical"
-                  margin={{ top: 10, right: 25, left: 10, bottom: 5 }}
-                >
-                  <defs>
-                    <linearGradient
-                      id="costBarFill"
-                      x1="0"
-                      y1="0"
-                      x2="1"
-                      y2="0"
-                    >
-                      <stop
-                        offset="0%"
-                        stopColor="#034337"
-                        stopOpacity={0.75}
-                      />
-                      <stop
-                        offset="100%"
-                        stopColor="#034337"
-                        stopOpacity={1}
-                      />
-                    </linearGradient>
-                  </defs>
-
-                  <CartesianGrid
-                    stroke="#e2e8f0"
-                    horizontal={false}
-                    strokeDasharray="3 3"
-                  />
-
-                  <XAxis
-                    type="number"
-                    fontSize={11}
-                    tickLine={false}
-                    axisLine={false}
-                    tick={{ fill: '#64748b' }}
-                    tickFormatter={(v: number) =>
-                      v >= 1_000_000
-                        ? `${(v / 1_000_000).toFixed(1)}M`
-                        : v >= 1000
-                          ? `${(v / 1000).toFixed(0)}K`
-                          : `${v}`
-                    }
-                  />
-
-                  <YAxis
-                    type="category"
-                    dataKey="name"
-                    width={105}
-                    fontSize={11}
-                    tickLine={false}
-                    axisLine={false}
-                    tick={{ fill: '#64748b' }}
-                  />
-
-                  <Tooltip
-                    {...tip}
-                    cursor={{ fill: '#034337', opacity: 0.05 }}
-                    formatter={(v: number) => [
-                      rwf(v),
-                      'Recorded cost',
-                    ]}
-                  />
-
-                  <Bar
-                    dataKey="amount"
-                    name="Recorded cost"
-                    fill="url(#costBarFill)"
-                    radius={[0, 7, 7, 0]}
-                    maxBarSize={28}
-                    animationDuration={900}
-                  />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-
-          {top && totalCost > 0 && (
-            <div className="mt-4 flex flex-wrap items-center gap-2 rounded-xl bg-slate-50 px-4 py-3">
-              <span className="grid h-8 w-8 place-items-center rounded-lg bg-[#034337]/10 text-[#034337]">
-                <Wallet size={16} />
-              </span>
-
-              <p className="text-sm text-slate-500">
-                Largest category:{' '}
-                <span className="font-semibold text-slate-800">
-                  {top.name}
-                </span>
-                ,{' '}
-                <span className="font-semibold text-[#034337]">
-                  {rwf(top.amount)}
-                </span>{' '}
-                ({Math.round((top.amount / totalCost) * 100)}% of recorded cost).
-              </p>
-            </div>
-          )}
+          <div className="flex flex-1 flex-col justify-around gap-6">
+            <Ring
+              value={clamp(k.avg)}
+              label="Physical progress"
+              sub="Average work done across projects"
+            />
+            <Ring
+              value={clamp(k.avgFinancial)}
+              label="Financial progress"
+              sub="Average financial progress across projects"
+            />
+          </div>
         </Panel>
       </div>
     </div>

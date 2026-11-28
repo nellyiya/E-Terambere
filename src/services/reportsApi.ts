@@ -1,3 +1,4 @@
+
 import { api } from '../lib/api'
 
 export type RStatus = 'Pending' | 'Approved' | 'Returned'
@@ -76,6 +77,7 @@ export interface ReportQuery {
   to: string
   status: string
   search: string
+  sort?: 'asc' | 'desc'
 }
 
 const params = (q: ReportQuery) => ({
@@ -85,6 +87,7 @@ const params = (q: ReportQuery) => ({
   date_to: q.to || undefined,
   status: q.status || undefined,
   search: q.search || undefined,
+  sort: q.sort || undefined,
 })
 
 export const listReports = async (
@@ -114,10 +117,19 @@ export const fetchAllReports = async (q: ReportQuery) => {
   }
 }
 
+export interface ActivityLine {
+  description: string
+  quantity: number
+  location: string
+}
+
 export interface EquipmentLine {
+  kind: 'Machine' | 'Truck' | 'Tool'
   name: string
   details: string
   hours: number
+  tripsSand: number
+  tripsStones: number
   fuelReceived: number
   fuelUsed: number
   fuelBalance: number
@@ -146,15 +158,15 @@ export interface ReportDetail {
   date: string
   status: RStatus
   returnNote: string | null
-  notes: string | null
   photos: { url: string; caption: string | null }[]
   reviewedAt: string | null
   reviewedBy: string | null
   startTime: string
   endTime: string
   challenge: string
+  notes: string
 
-  activities: string[]
+  activities: ActivityLine[]
   equipment: EquipmentLine[]
   materials: MaterialLine[]
   workers: WorkerLine[]
@@ -190,7 +202,13 @@ export const getReport = async (code: string): Promise<ReportDetail> => {
     endTime: d.end_time ?? '',
     challenge: d.challenge ?? '',
 
-    activities: d.activities,
+    activities: (d.activity_details ?? []).map(
+      (a: { description: string; quantity?: number; location?: string | null }) => ({
+        description: a.description,
+        quantity: Number(a.quantity ?? 0),
+        location: a.location ?? '',
+      }),
+    ),
 
     work: d.work.map(
       (w: {
@@ -218,10 +236,16 @@ export const getReport = async (code: string): Promise<ReportDetail> => {
         fuel_received: number
         fuel_used: number
         fuel_balance: number
+        kind?: 'Machine' | 'Truck' | 'Tool'
+        trips_sand?: number
+        trips_stones?: number
       }) => ({
+        kind: e.kind ?? 'Machine',
         name: e.name,
         details: e.details ?? '',
         hours: e.hours,
+        tripsSand: e.trips_sand ?? 0,
+        tripsStones: e.trips_stones ?? 0,
         fuelReceived: e.fuel_received,
         fuelUsed: e.fuel_used,
         fuelBalance: e.fuel_balance,
@@ -254,8 +278,9 @@ export interface ReportInput {
   startTime: string
   endTime: string
   challenge: string
+  notes: string
 
-  activities: string[]
+  activities: ActivityLine[]
   equipment: EquipmentLine[]
   materials: MaterialLine[]
   workers: WorkerLine[]
@@ -276,8 +301,13 @@ const body = (d: ReportInput) => ({
   start_time: d.startTime || null,
   end_time: d.endTime || null,
   challenge: d.challenge || null,
+  notes: d.notes || null,
 
-  activities: d.activities.map((description) => ({ description })),
+  activities: d.activities.map((a) => ({
+    description: a.description,
+    quantity: a.quantity,
+    location: a.location || null,
+  })),
 
   work: d.work.map((w) => ({
     boq_item_id: w.boqItemId,
@@ -287,12 +317,14 @@ const body = (d: ReportInput) => ({
   costs: [],
 
   equipment: d.equipment.map((e) => ({
+    kind: e.kind,
     name: e.name,
     details: e.details || null,
     hours: e.hours,
+    trips_sand: e.tripsSand,
+    trips_stones: e.tripsStones,
     fuel_received: e.fuelReceived,
     fuel_used: e.fuelUsed,
-    fuel_balance: e.fuelBalance,
   })),
 
   materials: d.materials,
@@ -304,14 +336,20 @@ const body = (d: ReportInput) => ({
   })),
 })
 
+export interface ReportSaveResponse {
+  id: string
+  warnings: string[]
+}
+
 export const createReport = async (
   d: ReportInput,
-): Promise<{ warnings: string[] }> => (await api.post('/reports', body(d))).data
+): Promise<ReportSaveResponse> =>
+  (await api.post('/reports', body(d))).data
 
 export const updateReport = async (
   code: string,
   d: ReportInput,
-): Promise<{ warnings: string[] }> =>
+): Promise<ReportSaveResponse> =>
   (await api.put(`/reports/${code}`, body(d))).data
 
 export const getSuggestions = async () =>
@@ -359,3 +397,14 @@ export const listBoq = async (code: string) =>
     unit: string
     rate: number
   }[]
+
+export const uploadReportPhoto = async (
+  code: string,
+  file: File,
+  caption: string = '',
+) => {
+  const form = new FormData()
+  form.append('photo', file)
+  form.append('caption', caption)
+  return (await api.post(`/reports/${code}/photos`, form)).data
+}

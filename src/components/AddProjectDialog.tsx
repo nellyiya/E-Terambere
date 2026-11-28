@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { X } from 'lucide-react'
+import { FolderKanban, X } from 'lucide-react'
 import { errMsg } from '../lib/api'
 import { createProject, daysBetween, durationText, getSupervisorOptions, projectChangedKeys, updateProject, type Project, type ProjectInput, type Status } from '../services/projectsApi'
-const cls = 'mt-1 w-full rounded-lg border px-3 py-2 text-sm'
+const cls = 'mt-1 w-full rounded-xl border bg-white px-3.5 py-2.5 text-sm outline-none transition focus:border-brand focus:ring-2 focus:ring-brand/20'
+const GRAD = 'linear-gradient(145deg, #2fae9d 0%, #1c8578 52%, #0f4a43 100%)'
 const TYPES = ['Road construction', 'Bridge', 'Dam', 'Water supply', 'Irrigation', 'Building', 'School', 'Health facility', 'Other']
 export default function AddProjectDialog({ onClose, project }: { onClose: () => void; project?: Project }) {
   const qc = useQueryClient(), nav = useNavigate()
@@ -33,9 +34,9 @@ export default function AddProjectDialog({ onClose, project }: { onClose: () => 
   const set = (k: keyof typeof v) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setV({ ...v, [k]: e.target.value })
   const E = ({ k }: { k: string }) => touched && err[k] ? <p className="mt-1 text-xs text-red-600">{err[k]}</p> : null
   const b = (k: string) => (touched && err[k] ? 'border-red-400' : 'border-slate-200')
-  return (<div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/40 p-4" role="dialog" aria-modal="true" aria-label={project ? 'Edit project' : 'Add project'}>
-    <form onSubmit={submit} noValidate className="max-h-[92vh] w-full max-w-2xl space-y-4 overflow-auto rounded-2xl bg-white p-6 shadow-xl">
-      <div className="flex items-center justify-between"><h2 className="text-lg font-semibold">{project ? 'Edit project' : 'Add project'}</h2><button type="button" onClick={onClose} aria-label="Close" className="rounded p-1 hover:bg-slate-100"><X size={18} /></button></div>
+  return (<div className="fixed inset-0 z-50 grid place-items-center bg-slate-900/40 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label={project ? 'Edit project' : 'Add project'}>
+    <form onSubmit={submit} noValidate className="max-h-[92vh] w-full max-w-2xl space-y-5 overflow-auto rounded-3xl bg-white p-6 shadow-2xl">
+      <div className="flex items-center justify-between border-b border-slate-100 pb-4"><div className="flex items-center gap-3"><span style={{ background: GRAD }} className="grid h-11 w-11 shrink-0 place-items-center rounded-full text-white shadow-md shadow-brand/30 ring-2 ring-white"><FolderKanban size={19} /></span><h2 className="text-lg font-semibold">{project ? 'Edit project' : 'Add project'}</h2></div><button type="button" onClick={onClose} aria-label="Close" className="rounded-full p-2 text-slate-500 transition hover:bg-slate-100"><X size={18} /></button></div>
       <datalist id="project-types">{TYPES.map(t => <option key={t} value={t} />)}</datalist>
       <div className="grid grid-cols-2 gap-4">
         <label className="col-span-2 block text-sm">1. Project name<input value={v.name} onChange={set('name')} autoFocus className={`${cls} ${b('name')}`} /><E k="name" /></label>
@@ -45,14 +46,14 @@ export default function AddProjectDialog({ onClose, project }: { onClose: () => 
         <label className="block text-sm">5. Project location<input value={v.location} onChange={set('location')} placeholder="e.g. Nyabarongo, Muhanga District" className={`${cls} ${b('location')}`} /><E k="location" /></label>
         <label className="block text-sm">6. Start date<input type="date" value={v.start} onChange={set('start')} className={`${cls} ${b('start')}`} /><E k="start" /></label>
         <label className="block text-sm">7. Expected completion<input type="date" value={v.end} min={v.start || undefined} onChange={set('end')} className={`${cls} ${b('end')}`} /><E k="end" /></label>
-        <div className="text-sm">8. Project duration<div aria-live="polite" className="mt-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-600">{days ? durationText(days) : 'Calculated from the two dates'}</div></div>
+        <div className="text-sm">8. Project duration<div aria-live="polite" className="mt-1 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-slate-600">{days ? durationText(days) : 'Calculated from the two dates'}</div></div>
         <label className="block text-sm">9. Contract value (RWF)<input type="number" min="0" value={v.value} onChange={set('value')} className={`${cls} ${b('value')}`} /><E k="value" /></label></div>
         <div className="grid grid-cols-3 gap-4 border-t border-slate-100 pt-4">
         <label className="block text-sm col-span-2">Supervisors
-          <div className="mt-1 space-y-1 rounded-lg border border-slate-200 p-2 max-h-40 overflow-y-auto">
+          <div className="mt-1 max-h-40 space-y-1 overflow-y-auto rounded-xl border border-slate-200 p-2">
             {sups.map(s => {
               const on = v.supervisorIds.includes(s.id)
-              return <label key={s.id} className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-slate-50 cursor-pointer">
+              return <label key={s.id} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 transition hover:bg-brand/5">
                 <input type="checkbox" checked={on} onChange={() => setV({ ...v, supervisorIds: on ? v.supervisorIds.filter(id => id !== s.id) : [...v.supervisorIds, s.id] })} className="accent-brand" />
                 <span className="text-sm">{s.name}</span>
               </label>
@@ -64,7 +65,7 @@ export default function AddProjectDialog({ onClose, project }: { onClose: () => 
         <label className="block text-sm">Status<select value={v.status} onChange={set('status')} className={`${cls} border-slate-200`}>{['Planning', 'Active', 'On Hold', 'Completed'].map(s => <option key={s}>{s}</option>)}</select></label></div>
       {m.error && <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{errMsg(m.error)}</p>}
       {touched && Object.keys(err).length > 0 && <p className="text-sm text-red-600">Please fix the highlighted problems above.</p>}
-      <div className="flex justify-end gap-2"><button type="button" onClick={onClose} className="rounded-lg border px-4 py-2 text-sm">Cancel</button>
-        <button disabled={m.isPending} className="rounded-lg bg-brand px-4 py-2 text-sm font-medium text-white disabled:opacity-60">{m.isPending ? 'Saving…' : project ? 'Save changes' : 'Create project'}</button></div>
+      <div className="sticky bottom-0 -mx-6 -mb-6 flex justify-end gap-2 border-t border-slate-100 bg-white px-6 py-4"><button type="button" onClick={onClose} className="rounded-full border border-slate-200 px-5 py-2 text-sm transition hover:bg-slate-50">Cancel</button>
+        <button disabled={m.isPending} className="rounded-full bg-brand px-6 py-2 text-sm font-medium text-white shadow-sm transition hover:opacity-90 disabled:opacity-60">{m.isPending ? 'Saving…' : project ? 'Save changes' : 'Create project'}</button></div>
     </form></div>)
 }
